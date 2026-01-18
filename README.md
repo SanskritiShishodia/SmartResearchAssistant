@@ -1,8 +1,7 @@
 # SmartResearchAssistant
 
-A Retrieval-Augmented Generation (RAG) app built with Streamlit, LangChain, and OpenAI GPT-3.5, designed to help users ask intelligent questions about uploaded research PDFs.
+A Retrieval-Augmented Generation (RAG) app built with Streamlit, LangChain, and llama-3.1-8b-instant, designed to help users ask intelligent questions about uploaded research PDFs.
 
-This project combines semantic search over documents with LLM-powered summarization, enabling concise and context-aware answers from your own data.
 
 🚀 Features
 
@@ -11,8 +10,6 @@ Upload one or more PDF documents
 Automatic text extraction, chunking, and embedding
 
 Contextual retrieval with FAISS
-
-GPT-3.5 integration for high-quality, grounded answers
 
 Persistent conversation history
 
@@ -26,6 +23,6 @@ Streamlit — user interface
 
 LangChain — document processing & RAG pipeline
 
-OpenAI GPT-3.5 — language model
+llama-3.1-8b-instant — language model
 
 HuggingFace Embeddings — vector search
