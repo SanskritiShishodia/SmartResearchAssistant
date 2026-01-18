@@ -1,62 +1,96 @@
 import streamlit as st
+
+# 1. RENDER UI FIRST (So you don't see a blank screen while imports load)
+st.set_page_config(page_title="Free RAG Assistant")
+st.title("🦙 Free Local RAG Assistant")
+st.write("Loading AI libraries... please wait...")
+
+# 2. HEAVY IMPORTS (Now happen after the title appears)
+import tempfile
 import os
-from rag_pipeline_hf import load_and_chunk_docs, create_vectorstore  # your local RAG code
-from gpt3_module import generate_answer_with_context  # GPT-3.5 wrapper
+from dotenv import load_dotenv
 
-st.set_page_config(page_title="🧠 Smart Research Assistant (GPT-3.5 + RAG)", layout="wide")
-st.title("🧠 Smart Research Assistant (GPT-3.5 + RAG)")
+from langchain_groq import ChatGroq
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+#from langchain.memory import ConversationBufferMemory
+from langchain_classic.chains.conversation.memory import ConversationBufferMemory
+from langchain_classic.chains import ConversationalRetrievalChain
 
-# Initialize session state for conversation history
-if "history" not in st.session_state:
-    st.session_state.history = []
+# Load environment variables from .env file
+load_dotenv()
 
-# Upload PDFs
-pdfs = st.file_uploader("Upload PDFs", accept_multiple_files=True, type=["pdf"])
-query = st.text_input("Ask a question about the documents:")
+# 3. UPDATE UI
+st.success("Libraries loaded!")
 
-if pdfs and query:
-    with st.spinner("Processing your question..."):
-        # Save uploaded PDFs
-        os.makedirs("data", exist_ok=True)
-        paths = []
-        for pdf in pdfs:
-            path = f"data/{pdf.name}"
-            with open(path, "wb") as f:
-                f.write(pdf.read())
-            paths.append(path)
+# --- Sidebar ---
+with st.sidebar:
+    st.header("Upload Files")
+    uploaded_files = st.file_uploader("Upload PDFs", accept_multiple_files=True, type=["pdf"])
 
-        # Load, chunk, and create vectorstore
-        chunks = load_and_chunk_docs(paths)
-        vectordb = create_vectorstore(chunks)
+# --- Functions ---
+def get_text_chunks(uploaded_files):
+    documents = []
+    for uploaded_file in uploaded_files:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+            tmp_file.write(uploaded_file.read())
+            tmp_file_path = tmp_file.name
+        
+        loader = PyPDFLoader(tmp_file_path)
+        docs = loader.load()
+        documents.extend(docs)
+        os.remove(tmp_file_path)
+    
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    return text_splitter.split_documents(documents)
 
-        # Retrieve top 3 relevant chunks for RAG
-        docs = vectordb.similarity_search(query, k=3)
-        context = "\n\n".join([doc.page_content for doc in docs])
+def get_vectorstore(text_chunks):
+    # Uses CPU-friendly embeddings
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    vectorstore = FAISS.from_documents(documents=text_chunks, embedding=embeddings)
+    return vectorstore
 
-        # Generate answer using GPT-3.5 with retrieved context
-        answer = generate_answer_with_context(query, context, max_tokens=200)
+def get_conversation_chain(vectorstore):
+    # Connects to the Groq server running in the background
+    llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
+    memory = ConversationBufferMemory(memory_key='chat_history', return_messages=True)
+    return ConversationalRetrievalChain.from_llm(llm=llm, retriever=vectorstore.as_retriever(), memory=memory)
 
-        # Append new entry to session history
-        st.session_state.history.append({
-            "query": query,
-            "answer": answer,
-            "sources": docs
-        })
+# --- Main Logic ---
+if "conversation" not in st.session_state:
+    st.session_state.conversation = None
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# Display latest answer
-if st.session_state.history:
-    latest = st.session_state.history[-1]
-    st.markdown("### 🧾 Answer")
-    st.write(latest["answer"])
+if st.sidebar.button("Process Docs"):
+    if not uploaded_files:
+        st.error("⚠️ Please upload PDF documents.")
+    else:
+        with st.spinner("Processing..."):
+            chunks = get_text_chunks(uploaded_files)
+            vectorstore = get_vectorstore(chunks)
+            st.session_state.conversation = get_conversation_chain(vectorstore)
+            st.success("Ready!")
 
-    st.markdown("### 📚 Sources")
-    for doc in latest["sources"]:
-        with st.expander(doc.metadata.get("source", "PDF Document")):
-            st.write(doc.page_content[:500] + "...")  # first 500 chars
+# --- Chat UI ---
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# Display full conversation history
-if st.session_state.history:
-    st.markdown("### 📝 Conversation History")
-    for idx, item in enumerate(st.session_state.history):
-        st.write(f"**Q{idx+1}: {item['query']}**")
-        st.write(f"A{idx+1}: {item['answer']}")
+user_question = st.chat_input("Ask a question:")
+
+if user_question:
+    if st.session_state.conversation:
+        st.session_state.messages.append({"role": "user", "content": user_question})
+        with st.chat_message("user"):
+            st.markdown(user_question)
+
+        with st.spinner("Thinking..."):
+            response = st.session_state.conversation({'question': user_question})
+            answer = response['answer']
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+            with st.chat_message("assistant"):
+                st.markdown(answer)
+                
